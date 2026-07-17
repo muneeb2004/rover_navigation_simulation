@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-# pyright: reportUnknownMemberType=false
-# pyright: reportUnknownParameterType=false
-# pyright: reportUnknownArgumentType=false
-# pyright: reportUnknownVariableType=false
-
 """
 Rover Navigation Simulator
 ===========================
@@ -33,6 +28,22 @@ sequential, per-step state updates are mathematically identical to applying
 a single composite matrix built by multiplying the same local transforms in
 chronological order (verified in TestChainedTransformations below).
 
+Manual configuration
+---------------------
+The starting pose and the full command sequence (and therefore the rover's
+final resting position/heading) are configurable at runtime via CLI flags
+(--initial-x/--initial-y/--initial-heading, --commands / --commands-file),
+never hardcoded. See resolve_raw_commands() and build_arg_parser().
+
+Matrix calculation reporting
+------------------------------
+Every command execution is logged as a CalculationStep, capturing the exact
+local transform matrix, the previous and resulting world transform matrices,
+and the extracted state. MatrixCalculationReporter renders this log as a
+full, numeric, step-by-step report (every matrix shown explicitly) suitable
+for instructor review, printed to console by default and optionally saved
+to a text file via --calculations-file.
+
 Run this file directly for a demo mission and trajectory plot, or with
 --run-tests to execute the full automated test suite.
 """
@@ -45,19 +56,16 @@ import sys
 import unittest
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
 try:
     import matplotlib.pyplot as plt
 
-    _matplotlib_available = True
+    MATPLOTLIB_AVAILABLE = True
 except ImportError:  # pragma: no cover - environment-dependent
-    plt = None  # type: ignore
-    _matplotlib_available = False
-
-MATPLOTLIB_AVAILABLE: bool = _matplotlib_available
+    MATPLOTLIB_AVAILABLE = False
 
 
 # ======================================================================
@@ -213,7 +221,7 @@ class RoverState:
         degrees = math.degrees(self.heading_rad)
         return ((degrees + 180.0) % 360.0) - 180.0
 
-    def as_homogeneous_vector(self) -> np.ndarray[Any, Any]:
+    def as_homogeneous_vector(self) -> np.ndarray:
         """Return this state's position as a homogeneous coordinate vector."""
         return np.array([self.x, self.y, 1.0], dtype=np.float64)
 
@@ -232,7 +240,7 @@ class TransformationEngine:
     """
 
     @staticmethod
-    def rotation_matrix(angle_rad: float) -> np.ndarray[Any, Any]:
+    def rotation_matrix(angle_rad: float) -> np.ndarray:
         """Pure rotation about the local origin by `angle_rad` radians."""
         cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
         return np.array(
@@ -245,7 +253,7 @@ class TransformationEngine:
         )
 
     @staticmethod
-    def translation_matrix(delta_x: float, delta_y: float) -> np.ndarray[Any, Any]:
+    def translation_matrix(delta_x: float, delta_y: float) -> np.ndarray:
         """Pure translation by (delta_x, delta_y)."""
         return np.array(
             [
@@ -257,7 +265,7 @@ class TransformationEngine:
         )
 
     @staticmethod
-    def combined_matrix(angle_rad: float, delta_x: float, delta_y: float) -> np.ndarray[Any, Any]:
+    def combined_matrix(angle_rad: float, delta_x: float, delta_y: float) -> np.ndarray:
         """Combined rotation-then-translation homogeneous transform.
 
         Equivalent to translation_matrix(delta_x, delta_y) @ rotation_matrix(angle_rad),
@@ -274,7 +282,7 @@ class TransformationEngine:
         )
 
     @staticmethod
-    def local_transform_for_command(command: Command) -> np.ndarray[Any, Any]:
+    def local_transform_for_command(command: Command) -> np.ndarray:
         """Build the local-frame transformation matrix for a single command."""
         if command.command_type is CommandType.FORWARD:
             return TransformationEngine.translation_matrix(command.value, 0.0)
@@ -285,26 +293,55 @@ class TransformationEngine:
         raise ValueError(f"Unsupported command type: {command.command_type!r}")
 
     @staticmethod
-    def compose_local_transforms(commands: Sequence[Command]) -> np.ndarray[Any, Any]:
+    def compose_local_transforms(
+        commands: Sequence[Command],
+        initial_transform: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Compose an ordered sequence of local-frame command transforms into
         a single composite matrix via chained matrix multiplication.
 
-        The composite is built in chronological order (first command applied
-        first): composite = T_1 @ T_2 @ ... @ T_n. Because each T_i is
-        expressed in the rover's local frame at the moment it is issued,
-        right-multiplication correctly accumulates world-frame pose.
+        composite = W_0 @ T_1 @ T_2 @ ... @ T_n, where W_0 is the rover's
+        starting world transform (identity if the rover starts at the
+        origin with zero heading, which is the default). Because each T_i
+        is expressed in the rover's local frame at the moment it is issued,
+        right-multiplication correctly accumulates world-frame pose
+        regardless of where the rover started.
         """
-        composite = np.identity(3, dtype=np.float64)
+        composite = (
+            np.identity(3, dtype=np.float64)
+            if initial_transform is None
+            else initial_transform.copy()
+        )
         for command in commands:
             composite = composite @ TransformationEngine.local_transform_for_command(command)
         return composite
 
     @staticmethod
-    def extract_state_from_world_transform(matrix: np.ndarray[Any, Any]) -> RoverState:
+    def extract_state_from_world_transform(matrix: np.ndarray) -> RoverState:
         """Recover (x, y, heading) from a 3x3 homogeneous world transform."""
         x, y = float(matrix[0, 2]), float(matrix[1, 2])
         heading_rad = math.atan2(float(matrix[1, 0]), float(matrix[0, 0]))
         return RoverState(x=x, y=y, heading_rad=heading_rad)
+
+
+# ======================================================================
+# Calculation logging (for instructor / professor review)
+# ======================================================================
+@dataclass(frozen=True)
+class CalculationStep:
+    """A complete, numeric record of one command's matrix arithmetic.
+
+    Captures every matrix involved in updating the rover's pose for a
+    single command, so the full computation W_n = W_(n-1) @ T_local can be
+    displayed and verified independently of the running program.
+    """
+
+    step_number: int
+    command: Command
+    local_transform: np.ndarray
+    previous_world_transform: np.ndarray
+    new_world_transform: np.ndarray
+    resulting_state: RoverState
 
 
 # ======================================================================
@@ -333,28 +370,43 @@ class Rover:
         self._validate_finite(heading_deg, "heading_deg")
 
         heading_rad = math.radians(heading_deg)
-        self._world_transform: np.ndarray[Any, Any] = TransformationEngine.combined_matrix(
+        self._world_transform: np.ndarray = TransformationEngine.combined_matrix(
             heading_rad, x, y
         )
         self.state: RoverState = RoverState(x=x, y=y, heading_rad=heading_rad)
         self.trajectory: List[RoverState] = [self.state.copy()]
+        self.calculation_log: List[CalculationStep] = []
 
     @staticmethod
-    def _validate_finite(value: Any, name: str) -> None:
+    def _validate_finite(value: float, name: str) -> None:
         if not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f"'{name}' must be a finite number, got {value!r}.")
 
     def apply_command(self, command: Command) -> RoverState:
-        """Apply a single command, update world pose, and record trajectory."""
-        if not isinstance(command, Command):  # pyright: ignore[reportUnnecessaryIsInstance]
+        """Apply a single command, update world pose, and record both the
+        trajectory and the full matrix arithmetic behind the update."""
+        if not isinstance(command, Command):
             raise TypeError(f"Expected a Command instance, got {type(command).__name__}.")
 
+        previous_world_transform = self._world_transform.copy()
         local_transform = TransformationEngine.local_transform_for_command(command)
-        self._world_transform = self._world_transform @ local_transform
+        new_world_transform = previous_world_transform @ local_transform
+
+        self._world_transform = new_world_transform
         self.state = TransformationEngine.extract_state_from_world_transform(
-            self._world_transform
+            new_world_transform
         )
         self.trajectory.append(self.state.copy())
+        self.calculation_log.append(
+            CalculationStep(
+                step_number=len(self.calculation_log) + 1,
+                command=command,
+                local_transform=local_transform.copy(),
+                previous_world_transform=previous_world_transform,
+                new_world_transform=new_world_transform.copy(),
+                resulting_state=self.state.copy(),
+            )
+        )
         return self.state
 
     def run_program(self, commands: Sequence[Command]) -> RoverState:
@@ -363,7 +415,7 @@ class Rover:
             self.apply_command(command)
         return self.state
 
-    def get_trajectory_arrays(self) -> Tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]]:
+    def get_trajectory_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the recorded trajectory as (xs, ys, heading_radians) arrays."""
         xs = np.array([s.x for s in self.trajectory], dtype=np.float64)
         ys = np.array([s.y for s in self.trajectory], dtype=np.float64)
@@ -391,7 +443,7 @@ class TrajectoryVisualizer:
             RuntimeError: If Matplotlib is not installed.
             ValueError: If the rover has no recorded trajectory.
         """
-        if not MATPLOTLIB_AVAILABLE or plt is None:
+        if not MATPLOTLIB_AVAILABLE:
             raise RuntimeError(
                 "Matplotlib is required for visualization but is not installed. "
                 "Install it with: pip install matplotlib"
@@ -445,7 +497,7 @@ class TrajectoryVisualizer:
         plt.close(figure)
 
     @staticmethod
-    def _compute_arrow_length(xs: np.ndarray[Any, Any], ys: np.ndarray[Any, Any]) -> float:
+    def _compute_arrow_length(xs: np.ndarray, ys: np.ndarray) -> float:
         """Scale heading-arrow length relative to the trajectory's extent."""
         span_x = float(xs.max() - xs.min()) if len(xs) > 1 else 1.0
         span_y = float(ys.max() - ys.min()) if len(ys) > 1 else 1.0
@@ -463,6 +515,143 @@ def print_trajectory_table(rover: Rover) -> None:
             f"{step:>4} | {state.x:>12.4f} | {state.y:>12.4f} | "
             f"{state.heading_deg:>14.4f}"
         )
+
+
+def format_matrix(matrix: np.ndarray, decimals: int = 4) -> str:
+    """Format a 3x3 matrix as aligned, bracketed rows for review, e.g.:
+
+        [   1.0000   0.0000   5.0000 ]
+        [   0.0000   1.0000   0.0000 ]
+        [   0.0000   0.0000   1.0000 ]
+    """
+    rows = []
+    for row in matrix:
+        formatted_values = [f"{value:>9.{decimals}f}" for value in row]
+        rows.append("[ " + "  ".join(formatted_values) + " ]")
+    return "\n".join(rows)
+
+
+def describe_command(command: Command) -> str:
+    """Human-readable description of a command for the calculation report."""
+    if command.command_type is CommandType.FORWARD:
+        return f"FORWARD {command.value:g} units"
+    if command.command_type is CommandType.BACKWARD:
+        return f"BACKWARD {command.value:g} units"
+    if command.command_type is CommandType.ROTATE:
+        return f"ROTATE {command.value:g} degrees"
+    raise ValueError(f"Unsupported command type: {command.command_type!r}")
+
+
+class MatrixCalculationReporter:
+    """Renders a rover's recorded calculation log as a full, numeric,
+    step-by-step report: every matrix built and every multiplication
+    performed, suitable for direct instructor review."""
+
+    @staticmethod
+    def generate_report(rover: Rover) -> str:
+        """Build the complete calculation report as a single string."""
+        lines: List[str] = []
+        lines.append("=" * 70)
+        lines.append("ROVER NAVIGATION SIMULATOR - MATRIX CALCULATION REPORT")
+        lines.append("=" * 70)
+
+        initial_state = rover.trajectory[0]
+        lines.append("")
+        lines.append(
+            f"Initial state:  x = {initial_state.x:.4f}   "
+            f"y = {initial_state.y:.4f}   "
+            f"heading = {initial_state.heading_deg:.4f} deg"
+        )
+
+        for step in rover.calculation_log:
+            lines.append("")
+            lines.append("-" * 70)
+            lines.append(f"STEP {step.step_number}: {describe_command(step.command)}")
+            lines.append("-" * 70)
+
+            lines.append("")
+            lines.append("Local-frame transformation matrix  T_local:")
+            lines.append(format_matrix(step.local_transform))
+
+            lines.append("")
+            lines.append("Previous world transform  W_(n-1):")
+            lines.append(format_matrix(step.previous_world_transform))
+
+            lines.append("")
+            lines.append("Matrix multiplication performed:  W_n = W_(n-1) . T_local")
+
+            lines.append("")
+            lines.append("Resulting world transform  W_n:")
+            lines.append(format_matrix(step.new_world_transform))
+
+            lines.append("")
+            lines.append(
+                f"Extracted state:  x = {step.resulting_state.x:.4f}   "
+                f"y = {step.resulting_state.y:.4f}   "
+                f"heading = {step.resulting_state.heading_deg:.4f} deg"
+            )
+
+        lines.append("")
+        lines.append("=" * 70)
+        final_state = rover.state
+        lines.append(
+            f"FINAL STATE:  x = {final_state.x:.4f}   "
+            f"y = {final_state.y:.4f}   "
+            f"heading = {final_state.heading_deg:.4f} deg"
+        )
+        lines.append("=" * 70)
+
+        commands = [step.command for step in rover.calculation_log]
+        if commands:
+            initial_world_transform = TransformationEngine.combined_matrix(
+                initial_state.heading_rad, initial_state.x, initial_state.y
+            )
+            composite_matrix = TransformationEngine.compose_local_transforms(
+                commands, initial_transform=initial_world_transform
+            )
+            composite_state = TransformationEngine.extract_state_from_world_transform(
+                composite_matrix
+            )
+            position_matches = (
+                abs(composite_state.x - final_state.x) < NUMERICAL_TOLERANCE
+                and abs(composite_state.y - final_state.y) < NUMERICAL_TOLERANCE
+            )
+            lines.append("")
+            lines.append(
+                "VERIFICATION: single composite matrix (all local transforms "
+                "multiplied together, T_1 . T_2 . ... . T_n) versus the "
+                "step-by-step result above:"
+            )
+            lines.append("")
+            lines.append("Composite matrix:")
+            lines.append(format_matrix(composite_matrix))
+            lines.append("")
+            lines.append(
+                f"Composite-derived state:  x = {composite_state.x:.4f}   "
+                f"y = {composite_state.y:.4f}   "
+                f"heading = {composite_state.heading_deg:.4f} deg"
+            )
+            lines.append(
+                f"Matches step-by-step final state: "
+                f"{'YES' if position_matches else 'NO'}"
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def save_report(rover: Rover, path: str) -> None:
+        """Write the full calculation report to a text file.
+
+        Raises:
+            OSError: If the file cannot be written.
+        """
+        report_text = MatrixCalculationReporter.generate_report(rover)
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(report_text)
+                handle.write("\n")
+        except OSError as exc:
+            raise OSError(f"Could not write calculation report to '{path}': {exc}") from exc
 
 
 # ======================================================================
@@ -541,6 +730,36 @@ class TestChainedTransformations(unittest.TestCase):
             delta=NUMERICAL_TOLERANCE,
         )
 
+    def test_composite_matrix_matches_with_nonzero_starting_pose(self) -> None:
+        """Regression test: the composite must account for a non-default
+        initial pose, not silently assume the rover starts at the origin."""
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+
+        sequential_rover = Rover(initial_x=2.0, initial_y=1.0, initial_heading_deg=30.0)
+        sequential_rover.run_program(commands)
+
+        initial_world_transform = TransformationEngine.combined_matrix(
+            math.radians(30.0), 2.0, 1.0
+        )
+        composite_matrix = TransformationEngine.compose_local_transforms(
+            commands, initial_transform=initial_world_transform
+        )
+        composite_state = TransformationEngine.extract_state_from_world_transform(
+            composite_matrix
+        )
+
+        self.assertAlmostEqual(
+            composite_state.x, sequential_rover.state.x, delta=NUMERICAL_TOLERANCE
+        )
+        self.assertAlmostEqual(
+            composite_state.y, sequential_rover.state.y, delta=NUMERICAL_TOLERANCE
+        )
+        self.assertAlmostEqual(
+            composite_state.heading_rad,
+            sequential_rover.state.heading_rad,
+            delta=NUMERICAL_TOLERANCE,
+        )
+
 
 class TestBoundaryCases(unittest.TestCase):
     """Zero-value, full-rotation, large-value, and invalid inputs."""
@@ -588,6 +807,93 @@ class TestBoundaryCases(unittest.TestCase):
             rover.reset(x=float("nan"), y=0.0, heading_deg=0.0)
 
 
+class TestManualConfiguration(unittest.TestCase):
+    """The rover's start pose and command program must be fully
+    configurable at runtime rather than hardcoded."""
+
+    def test_custom_initial_pose(self) -> None:
+        rover = Rover(initial_x=10.0, initial_y=-5.0, initial_heading_deg=90.0)
+        self.assertAlmostEqual(rover.state.x, 10.0, delta=NUMERICAL_TOLERANCE)
+        self.assertAlmostEqual(rover.state.y, -5.0, delta=NUMERICAL_TOLERANCE)
+        self.assertAlmostEqual(rover.state.heading_deg, 90.0, delta=1e-4)
+
+    def test_custom_initial_pose_affects_final_end_point(self) -> None:
+        rover_a = Rover(initial_x=0.0, initial_y=0.0)
+        rover_b = Rover(initial_x=100.0, initial_y=50.0)
+        command = Command(CommandType.FORWARD, 5.0)
+        rover_a.apply_command(command)
+        rover_b.apply_command(command)
+        self.assertNotAlmostEqual(rover_a.state.x, rover_b.state.x)
+
+    def test_inline_command_string_parsing(self) -> None:
+        raw_commands = resolve_inline_commands("FORWARD 5;ROTATE 90;FORWARD 2")
+        commands = CommandParser.parse_program(raw_commands)
+        self.assertEqual(len(commands), 3)
+        self.assertEqual(commands[0].command_type, CommandType.FORWARD)
+        self.assertEqual(commands[1].command_type, CommandType.ROTATE)
+
+    def test_inline_command_string_with_newlines(self) -> None:
+        raw_commands = resolve_inline_commands("FORWARD 5\nROTATE 90\nFORWARD 2")
+        commands = CommandParser.parse_program(raw_commands)
+        self.assertEqual(len(commands), 3)
+
+
+class TestMatrixCalculationLog(unittest.TestCase):
+    """The rover must retain a complete, verifiable record of every matrix
+    computation performed, for instructor review."""
+
+    def test_calculation_log_length_matches_command_count(self) -> None:
+        rover = Rover()
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+        rover.run_program(commands)
+        self.assertEqual(len(rover.calculation_log), len(commands))
+
+    def test_calculation_log_multiplication_is_internally_consistent(self) -> None:
+        rover = Rover()
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+        rover.run_program(commands)
+        for step in rover.calculation_log:
+            recomputed = step.previous_world_transform @ step.local_transform
+            self.assertTrue(
+                np.allclose(recomputed, step.new_world_transform, atol=NUMERICAL_TOLERANCE)
+            )
+
+    def test_calculation_log_chains_between_steps(self) -> None:
+        rover = Rover()
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+        rover.run_program(commands)
+        for previous_step, next_step in zip(rover.calculation_log, rover.calculation_log[1:]):
+            self.assertTrue(
+                np.allclose(
+                    previous_step.new_world_transform,
+                    next_step.previous_world_transform,
+                    atol=NUMERICAL_TOLERANCE,
+                )
+            )
+
+    def test_report_generation_contains_all_steps(self) -> None:
+        rover = Rover()
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+        rover.run_program(commands)
+        report = MatrixCalculationReporter.generate_report(rover)
+        self.assertIn("MATRIX CALCULATION REPORT", report)
+        for step_number in range(1, len(commands) + 1):
+            self.assertIn(f"STEP {step_number}:", report)
+        self.assertIn("FINAL STATE", report)
+        self.assertIn("Matches step-by-step final state: YES", report)
+
+    def test_report_verification_passes_with_nonzero_starting_pose(self) -> None:
+        rover = Rover(initial_x=2.0, initial_y=1.0, initial_heading_deg=30.0)
+        commands = CommandParser.parse_program(DEMO_MISSION_COMMANDS)
+        rover.run_program(commands)
+        report = MatrixCalculationReporter.generate_report(rover)
+        self.assertIn("Matches step-by-step final state: YES", report)
+
+    def test_format_matrix_produces_three_rows(self) -> None:
+        formatted = format_matrix(np.identity(3))
+        self.assertEqual(len(formatted.splitlines()), 3)
+
+
 # ======================================================================
 # Command-line interface
 # ======================================================================
@@ -600,13 +906,47 @@ def build_arg_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument(
+        "--commands",
+        type=str,
+        default=None,
+        metavar="PROGRAM",
+        help=(
+            "Inline command sequence, separated by ';' or newlines "
+            "(e.g. \"FORWARD 5;ROTATE 90;FORWARD 3\"). "
+            "Takes precedence over --commands-file and the demo mission, "
+            "making the rover's end point fully manually configurable."
+        ),
+    )
+    parser.add_argument(
         "--commands-file",
         type=str,
         default=None,
         help=(
             "Path to a text file containing one command per line "
-            "(e.g. 'FORWARD 5'). Defaults to a built-in demo mission."
+            "(e.g. 'FORWARD 5'). Used if --commands is not given. "
+            "Defaults to a built-in demo mission if neither is given."
         ),
+    )
+    parser.add_argument(
+        "--initial-x",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="Rover's starting X position (default: 0.0).",
+    )
+    parser.add_argument(
+        "--initial-y",
+        type=float,
+        default=0.0,
+        metavar="Y",
+        help="Rover's starting Y position (default: 0.0).",
+    )
+    parser.add_argument(
+        "--initial-heading",
+        type=float,
+        default=0.0,
+        metavar="DEGREES",
+        help="Rover's starting heading in degrees (default: 0.0).",
     )
     parser.add_argument(
         "--no-show",
@@ -619,6 +959,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="File path to save the trajectory plot image (e.g. trajectory.png).",
+    )
+    parser.add_argument(
+        "--hide-calculations",
+        action="store_true",
+        help=(
+            "Suppress the detailed, step-by-step matrix calculation report "
+            "from console output (shown by default for instructor review)."
+        ),
+    )
+    parser.add_argument(
+        "--calculations-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Also save the full matrix calculation report to a text file.",
     )
     parser.add_argument(
         "--run-tests",
@@ -641,6 +996,25 @@ def load_commands_from_file(path: str) -> List[str]:
         raise FileNotFoundError(f"Could not read commands file '{path}': {exc}") from exc
 
 
+def resolve_inline_commands(raw_program: str) -> List[str]:
+    """Split an inline, semicolon/newline-separated command string into
+    individual raw command lines."""
+    normalized = raw_program.replace("\n", ";")
+    return [segment for segment in normalized.split(";")]
+
+
+def resolve_raw_commands(args: argparse.Namespace) -> List[str]:
+    """Determine the raw command lines to execute based on CLI precedence:
+    --commands (inline) > --commands-file > built-in demo mission. This is
+    what makes the rover's mission, and therefore its end point, fully
+    manually configurable rather than hardcoded."""
+    if args.commands:
+        return resolve_inline_commands(args.commands)
+    if args.commands_file:
+        return load_commands_from_file(args.commands_file)
+    return DEMO_MISSION_COMMANDS
+
+
 def main() -> int:
     """CLI entry point. Returns a process exit code."""
     args = build_arg_parser().parse_args()
@@ -650,11 +1024,11 @@ def main() -> int:
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.wasSuccessful() else 1
 
-    raw_commands = (
-        load_commands_from_file(args.commands_file)
-        if args.commands_file
-        else DEMO_MISSION_COMMANDS
-    )
+    try:
+        raw_commands = resolve_raw_commands(args)
+    except FileNotFoundError as exc:
+        print(f"Error loading commands: {exc}", file=sys.stderr)
+        return 1
 
     try:
         commands = CommandParser.parse_program(raw_commands)
@@ -666,9 +1040,30 @@ def main() -> int:
         print("Error: no valid commands to execute.", file=sys.stderr)
         return 1
 
-    rover = Rover()
+    try:
+        rover = Rover(
+            initial_x=args.initial_x,
+            initial_y=args.initial_y,
+            initial_heading_deg=args.initial_heading,
+        )
+    except ValueError as exc:
+        print(f"Error configuring initial pose: {exc}", file=sys.stderr)
+        return 1
+
     rover.run_program(commands)
     print_trajectory_table(rover)
+
+    if not args.hide_calculations:
+        print()
+        print(MatrixCalculationReporter.generate_report(rover))
+
+    if args.calculations_file:
+        try:
+            MatrixCalculationReporter.save_report(rover, args.calculations_file)
+            print(f"\nMatrix calculation report saved to '{args.calculations_file}'")
+        except OSError as exc:
+            print(f"Error saving calculation report: {exc}", file=sys.stderr)
+            return 1
 
     if MATPLOTLIB_AVAILABLE:
         try:
