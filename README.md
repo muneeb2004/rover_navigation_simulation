@@ -1,8 +1,34 @@
-# Rover Navigation Simulator
+# Project 8: Rover Navigation Simulator
 
-A planetary rover simulation that computes position, heading, and trajectories on Windows.
+A planetary rover simulation that computes position, heading, and trajectories on Windows using linear algebra transformation matrices.
 
-## Requirements
+## Group Members
+* **Sheikh M Muneeb**
+* **Misha Jessani**
+* **Adil Saleem**
+
+---
+
+## Project Requirements & Implementation Summary
+
+| Requirement | Implementation Detail | Status |
+| :--- | :--- | :---: |
+| **1. Represent rover position as a vector** | Position $[x, y]^T$, state vector $[x, y, \theta]^T$, and homogeneous vector $[x, y, 1]^T$ | Verified |
+| **2. Implement movement operations** | Forward & backward translation vectors and transformation matrices $T(t_x, t_y)$ | Verified |
+| **3. Apply rotation matrices** | 2D rotation matrices $R(\theta)$ and combined transformation matrices $T(\theta, t_x, t_y)$ | Verified |
+| **4. Chain multiple transformations** | Order-dependent matrix multiplication $W_n = W_0 \cdot T_1 \cdot T_2 \cdots T_n$ | Verified |
+| **5. Display rover's trajectory** | Matplotlib 2D trajectory rendering with heading arrows, path history, and PNG export | Verified |
+
+### Mathematical Concepts Explored
+* **Matrix multiplication**: Chronological composition of local command matrices $W_n = W_{n-1} \cdot T_{\text{local}}$.
+* **Rotation matrices**: 2D rotation $R(\theta) = \begin{bmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{bmatrix}$.
+* **Translation**: Displacement vectors $\mathbf{t} = [t_x, t_y]^T$.
+* **Coordinate transformations**: Local rover frame vs. global world frame.
+* **Homogeneous coordinates**: Unifying rotation and translation in a $3\times3$ matrix.
+
+---
+
+## System Requirements & Setup
 
 The project requires Python 3.8+ along with the dependencies listed in [requirements.txt](file:///D:/Habib%20Uni/Summer%20Sem/Project/requirements.txt):
 * **NumPy** for matrix transformations
@@ -12,6 +38,8 @@ Install dependencies using `pip`:
 ```cmd
 pip install -r requirements.txt
 ```
+
+---
 
 ## Running the Program on Windows
 
@@ -39,4 +67,3 @@ Or with parameters:
 ```powershell
 .\run.ps1 --run-tests
 ```
-# rover_navigation_simulation

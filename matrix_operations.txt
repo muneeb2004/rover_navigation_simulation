@@ -1,0 +1,132 @@
+======================================================================
+ROUTE PLANNING DERIVATION
+======================================================================
+
+Start point:  (0.0000, 0.0000)   heading = 0.0000 deg
+End point:    (5.0000, 5.0000)   heading = not specified
+
+Displacement vector:
+  delta_x = end_x - start_x = 5.0000 - 0.0000 = 5.0000
+  delta_y = end_y - start_y = 5.0000 - 0.0000 = 5.0000
+
+Distance to target:
+  distance = sqrt(delta_x^2 + delta_y^2) = sqrt(5.0000^2 + 5.0000^2) = 7.0711
+
+Heading required to face the target:
+  heading_to_target = atan2(delta_y, delta_x) = atan2(5.0000, 5.0000) = 45.0000 deg
+
+Initial rotation needed:
+  initial_turn = heading_to_target - start_heading = 45.0000 - 0.0000 = 45.0000 deg (normalized to [-180, 180))
+
+Derived command sequence:
+  1. ROTATE 45 degrees
+  2. FORWARD 7.07107 units
+
+======================================================================
+ROVER NAVIGATION SIMULATOR - MATRIX CALCULATION REPORT
+======================================================================
+
+Initial state:  x = 0.0000   y = 0.0000   heading = 0.0000 deg (0.0000 rad)
+
+Initial world transform matrix  W_0:
+[    1.0000    -0.0000     0.0000 ]
+[    0.0000     1.0000     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+----------------------------------------------------------------------
+STEP 1: ROTATE 45 degrees
+----------------------------------------------------------------------
+
+Command Parameter: Rotation angle theta = 45.0000 deg (0.7854 rad)
+Local Matrix Formula: T_local = [[cos(theta), -sin(theta), 0], [sin(theta), cos(theta), 0], [0, 0, 1]]
+  cos(45.0000 deg) = 0.7071
+  sin(45.0000 deg) = 0.7071
+
+Local-frame transformation matrix  T_local:
+[    0.7071    -0.7071     0.0000 ]
+[    0.7071     0.7071     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+Previous world transform  W_(n-1):
+[    1.0000    -0.0000     0.0000 ]
+[    0.0000     1.0000     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+Matrix multiplication performed:  W_n = W_(n-1) . T_local
+Element-by-element dot product breakdown (W_n[i,j] = sum_k W_(n-1)[i,k] * T_local[k,j]):
+  W_n[0,0] = (1.0000 * 0.7071) + (-0.0000 * 0.7071) + (0.0000 * 0.0000) = 0.7071
+  W_n[0,1] = (1.0000 * -0.7071) + (-0.0000 * 0.7071) + (0.0000 * 0.0000) = -0.7071
+  W_n[0,2] = (1.0000 * 0.0000) + (-0.0000 * 0.0000) + (0.0000 * 1.0000) = 0.0000
+  W_n[1,0] = (0.0000 * 0.7071) + (1.0000 * 0.7071) + (0.0000 * 0.0000) = 0.7071
+  W_n[1,1] = (0.0000 * -0.7071) + (1.0000 * 0.7071) + (0.0000 * 0.0000) = 0.7071
+  W_n[1,2] = (0.0000 * 0.0000) + (1.0000 * 0.0000) + (0.0000 * 1.0000) = 0.0000
+  W_n[2,0] = (0.0000 * 0.7071) + (0.0000 * 0.7071) + (1.0000 * 0.0000) = 0.0000
+  W_n[2,1] = (0.0000 * -0.7071) + (0.0000 * 0.7071) + (1.0000 * 0.0000) = 0.0000
+  W_n[2,2] = (0.0000 * 0.0000) + (0.0000 * 0.0000) + (1.0000 * 1.0000) = 1.0000
+
+Resulting world transform  W_n:
+[    0.7071    -0.7071     0.0000 ]
+[    0.7071     0.7071     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+State Extraction Formulas from Homogeneous World Matrix W_n:
+  Position X = W_n[0, 2] = 0.0000
+  Position Y = W_n[1, 2] = 0.0000
+  Heading    = atan2(W_n[1,0], W_n[0,0]) = atan2(0.7071, 0.7071) = 0.7854 rad (45.0000 deg)
+
+Extracted state:  x = 0.0000   y = 0.0000   heading = 45.0000 deg
+
+----------------------------------------------------------------------
+STEP 2: FORWARD 7.07107 units
+----------------------------------------------------------------------
+
+Command Parameter: Translation distance d = 7.0711 units
+Local Matrix Formula: T_local = [[1, 0, d], [0, 1, 0], [0, 0, 1]]
+
+Local-frame transformation matrix  T_local:
+[    1.0000     0.0000     7.0711 ]
+[    0.0000     1.0000     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+Previous world transform  W_(n-1):
+[    0.7071    -0.7071     0.0000 ]
+[    0.7071     0.7071     0.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+Matrix multiplication performed:  W_n = W_(n-1) . T_local
+Element-by-element dot product breakdown (W_n[i,j] = sum_k W_(n-1)[i,k] * T_local[k,j]):
+  W_n[0,0] = (0.7071 * 1.0000) + (-0.7071 * 0.0000) + (0.0000 * 0.0000) = 0.7071
+  W_n[0,1] = (0.7071 * 0.0000) + (-0.7071 * 1.0000) + (0.0000 * 0.0000) = -0.7071
+  W_n[0,2] = (0.7071 * 7.0711) + (-0.7071 * 0.0000) + (0.0000 * 1.0000) = 5.0000
+  W_n[1,0] = (0.7071 * 1.0000) + (0.7071 * 0.0000) + (0.0000 * 0.0000) = 0.7071
+  W_n[1,1] = (0.7071 * 0.0000) + (0.7071 * 1.0000) + (0.0000 * 0.0000) = 0.7071
+  W_n[1,2] = (0.7071 * 7.0711) + (0.7071 * 0.0000) + (0.0000 * 1.0000) = 5.0000
+  W_n[2,0] = (0.0000 * 1.0000) + (0.0000 * 0.0000) + (1.0000 * 0.0000) = 0.0000
+  W_n[2,1] = (0.0000 * 0.0000) + (0.0000 * 1.0000) + (1.0000 * 0.0000) = 0.0000
+  W_n[2,2] = (0.0000 * 7.0711) + (0.0000 * 0.0000) + (1.0000 * 1.0000) = 1.0000
+
+Resulting world transform  W_n:
+[    0.7071    -0.7071     5.0000 ]
+[    0.7071     0.7071     5.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+State Extraction Formulas from Homogeneous World Matrix W_n:
+  Position X = W_n[0, 2] = 5.0000
+  Position Y = W_n[1, 2] = 5.0000
+  Heading    = atan2(W_n[1,0], W_n[0,0]) = atan2(0.7071, 0.7071) = 0.7854 rad (45.0000 deg)
+
+Extracted state:  x = 5.0000   y = 5.0000   heading = 45.0000 deg
+
+======================================================================
+FINAL STATE:  x = 5.0000   y = 5.0000   heading = 45.0000 deg
+======================================================================
+
+VERIFICATION: single composite matrix (all local transforms multiplied together, T_1 . T_2 . ... . T_n) versus the step-by-step result above:
+
+Composite matrix:
+[    0.7071    -0.7071     5.0000 ]
+[    0.7071     0.7071     5.0000 ]
+[    0.0000     0.0000     1.0000 ]
+
+Composite-derived state:  x = 5.0000   y = 5.0000   heading = 45.0000 deg
+Matches step-by-step final state: YES

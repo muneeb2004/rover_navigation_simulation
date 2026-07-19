@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
-Rover Navigation Simulator
-===========================
+Project 8: Rover Navigation Simulator
+=======================================
+Course       : Linear Algebra
+Group Members: Sheikh M Muneeb, Misha Jessani, Adil Saleem
 
+Overview:
 A planetary rover receives a sequence of movement commands while exploring
 unknown terrain. This module computes the rover's resulting position and
 orientation after each command using homogeneous-coordinate transformation
 matrices, records the full trajectory, and renders it with Matplotlib.
+
+Expected Implementation & Requirements Checklist:
+1. Represent rover position as a vector (Position & Heading State Vector).
+2. Implement movement operations (Forward & Backward translations).
+3. Apply rotation matrices (2D Rotation & Homogeneous Transformations).
+4. Chain multiple transformations (Matrix Multiplication & Composition).
+5. Display the rover's trajectory (2D Path Plotting with Heading Vectors).
 
 Architecture (mirrors the project design document):
 
